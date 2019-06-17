@@ -33,6 +33,7 @@ package gobacnet
 
 import (
 	"fmt"
+	"github.com/pkg/errors"
 	"net"
 	"os"
 	"time"
@@ -68,7 +69,70 @@ func getBroadcast(addr string) (net.IP, error) {
 	}
 	return broadcast, nil
 }
+//getLocalAddress get local ipNet such as x.x.x.x/24
+func getLocalAddress() (address string, err error){
+	adders, err := net.InterfaceAddrs()
+	if err != nil{
+		return "", errors.Wrap(err, "InterfaceAddrs error")
+	}
+	for _, addr := range adders {
+		ip, _, err := net.ParseCIDR(addr.String())
+		if err != nil || ip.IsUnspecified() || ip.To4() == nil || ip.IsLoopback() {
+			continue
+		}
+		return addr.String(), nil
+	}
+	return "",  errors.New("can not get Local Address")
+}
+func NewClient2(port int) (*Client, error){
+	var err error
+	c := &Client{}
+	if port == 0 {
+		c.port = DefaultPort
+	} else {
+		c.port = port
+	}
+	c.myAddress, err = getLocalAddress()
+	if err != nil{
+		return nil, errors.WithMessage(err, "newClient2 error")
+	}
+	broadcast, err := getBroadcast(c.myAddress)
+	if err != nil {
+		return c, err
+	}
+	c.broadcastAddress = broadcast
 
+	c.tsm = tsm.New(defaultStateSize)
+	options := []utsm.ManagerOption{
+		utsm.DefaultSubscriberTimeout(time.Second * time.Duration(10)),
+		utsm.DefaultSubscriberLastReceivedTimeout(time.Second * time.Duration(2)),
+	}
+	c.utsm = utsm.NewManager(options...)
+	udp, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", c.port))
+	conn, err := net.ListenUDP("udp", udp)
+	if err != nil {
+		return nil, err
+	}
+
+	c.listener = conn
+	c.log = logrus.New()
+	c.log.Formatter = &logrus.TextFormatter{}
+	c.log.SetLevel(logrus.DebugLevel)
+
+	// open a debug file
+	f, err := os.Create("gobacnet.log")
+	if err != nil {
+		return c, fmt.Errorf("Could not create a log file")
+	}
+	c.log.Out = f
+
+	// Print out relevant information
+	c.log.Debug(fmt.Sprintf("Broadcast Address: %v", c.broadcastAddress))
+	c.log.Debug(fmt.Sprintf("Local Address: %s", c.myAddress))
+	c.log.Debug(fmt.Sprintf("Port: %x", c.port))
+	go c.listen()
+	return c, nil
+}
 // NewClient creates a new client with the given interface and
 // port.
 func NewClient(inter string, port int) (*Client, error) {
@@ -147,7 +211,7 @@ func NewClient(inter string, port int) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) localAddress() (la bactype.Address, err error) {
+func (c *Client) localBaneAddress() (la bactype.Address, err error) {
 	ip, _, _ := net.ParseCIDR(c.myAddress)
 	ad := ip.To4()
 	udp := net.UDPAddr{
