@@ -47,7 +47,7 @@ func (c *Client) WhoIs(low, high int) ([]types.Device, error) {
 		IP:   c.broadcastAddress,
 		Port: DefaultPort,
 	})
-	src, _ := c.localAddress()
+	src, _ := c.localBaneAddress()
 
 	dest.SetBroadcast(true)
 
